@@ -6,19 +6,16 @@ export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState('sync');
   const [message, setMessage] = useState({ text: '', type: '' });
   
-  // Data States
   const [teams, setTeams] = useState([]);
   const [leagues, setLeagues] = useState([]);
   const [activeLeagueId, setActiveLeagueId] = useState(localStorage.getItem('active_league_id') || null);
   const [syncStats, setSyncStats] = useState(null);
 
-  // Form States
   const [leagueForm, setLeagueForm] = useState({ name: '', description: '' });
   const [playerForm, setPlayerForm] = useState({ username: '', challonge_username: '', team_id: '' });
   const [teamForm, setTeamForm] = useState({ name: '', logo_url: '' });
   const [syncForm, setSyncForm] = useState({ tournament_id: '' });
 
-  // Helper: Auth Headers
   const getAuthHeaders = () => {
     const token = localStorage.getItem('token');
     return {
@@ -32,7 +29,7 @@ export default function AdminDashboard() {
     setTimeout(() => setMessage({ text: '', type: '' }), 8000);
   };
 
-  // 1. ROUTE PROTECTION & INITIAL DATA LOAD
+  // 1. Initial Load & Route Protection
   useEffect(() => {
     const token = localStorage.getItem('token');
     const isAdmin = localStorage.getItem('is_admin') === 'true';
@@ -42,10 +39,9 @@ export default function AdminDashboard() {
       return;
     }
 
-    // Fetch the Admin's Leagues
     fetch('http://127.0.0.1:8000/api/leagues/me', { headers: getAuthHeaders() })
       .then(res => {
-        if (!res.ok) throw new Error("Failed to load leagues. Token may be expired.");
+        if (!res.ok) throw new Error("Failed to load leagues.");
         return res.json();
       })
       .then(data => setLeagues(data))
@@ -54,15 +50,18 @@ export default function AdminDashboard() {
         localStorage.removeItem('token');
         navigate('/login');
       });
-
-    // Fetch Teams for the dropdown (We will scope this to the active league later!)
-    fetch('http://127.0.0.1:8000/api/teams')
-      .then(res => res.json())
-      .then(data => setTeams(data))
-      .catch(err => console.error("Could not load teams", err));
   }, [navigate]);
 
-  // --- LEAGUE MANAGEMENT ---
+  // 2. NEW: Dynamically fetch teams ONLY for the active league
+  useEffect(() => {
+    if (activeLeagueId) {
+      fetch(`http://127.0.0.1:8000/api/teams?league_id=${activeLeagueId}`)
+        .then(res => res.json())
+        .then(data => setTeams(data))
+        .catch(err => console.error("Could not load teams", err));
+    }
+  }, [activeLeagueId]);
+
   const handleLeagueSubmit = async (e) => {
     e.preventDefault();
     setMessage({ text: 'Initializing Workspace...', type: 'loading' });
@@ -80,28 +79,23 @@ export default function AdminDashboard() {
       displayMessage('League initialized!', 'success');
       setLeagues([...leagues, data]);
       setLeagueForm({ name: '', description: '' });
-      
-      // Auto-select the newly created league
-      selectLeague(data.id.toString());
-    } catch (error) {
-      displayMessage(error.message, 'error');
-    }
+      setActiveLeagueId(data.id.toString());
+      localStorage.setItem('active_league_id', data.id.toString());
+    } catch (error) { displayMessage(error.message, 'error'); }
   };
 
-  const selectLeague = (id) => {
-    setActiveLeagueId(id);
-    localStorage.setItem('active_league_id', id);
-  };
-
-  // --- EXISTING DASHBOARD FUNCTIONS ---
+  // 3. NEW: Inject Active League ID into the Sync Payload
   const handleSyncSubmit = async (e) => {
     e.preventDefault();
     setMessage({ text: 'Syncing with Challonge API...', type: 'loading' });
+    
+    const payload = { ...syncForm, league_id: parseInt(activeLeagueId) };
+
     try {
       const response = await fetch('http://127.0.0.1:8000/api/sync/challonge', {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify(syncForm)
+        body: JSON.stringify(payload)
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || "Failed to sync tournament");
@@ -111,10 +105,17 @@ export default function AdminDashboard() {
     } catch (error) { displayMessage(error.message, 'error'); }
   };
 
+  // 4. NEW: Inject Active League ID into the Player Payload
   const handlePlayerSubmit = async (e) => {
     e.preventDefault();
     setMessage({ text: 'Registering...', type: 'loading' });
-    const payload = { ...playerForm, team_id: playerForm.team_id ? parseInt(playerForm.team_id) : null };
+    
+    const payload = { 
+      ...playerForm, 
+      team_id: playerForm.team_id ? parseInt(playerForm.team_id) : null,
+      league_id: parseInt(activeLeagueId)
+    };
+
     try {
       const response = await fetch('http://127.0.0.1:8000/api/players', {
         method: 'POST',
@@ -128,14 +129,18 @@ export default function AdminDashboard() {
     } catch (error) { displayMessage(error.message, 'error'); }
   };
 
+  // 5. NEW: Inject Active League ID into the Team Payload
   const handleTeamSubmit = async (e) => {
     e.preventDefault();
     setMessage({ text: 'Creating Team...', type: 'loading' });
+    
+    const payload = { ...teamForm, league_id: parseInt(activeLeagueId) };
+
     try {
       const response = await fetch('http://127.0.0.1:8000/api/teams', {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify(teamForm)
+        body: JSON.stringify(payload)
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || "Failed to create team");
@@ -145,14 +150,10 @@ export default function AdminDashboard() {
     } catch (error) { displayMessage(error.message, 'error'); }
   };
 
-  // ---------------------------------------------------------
-  // RENDER: WORKSPACE SELECTION (If no league is active)
-  // ---------------------------------------------------------
   if (!activeLeagueId) {
     return (
       <div className="min-h-[90vh] bg-gray-950 text-gray-100 p-6 flex items-center justify-center border-t border-red-900/30">
         <div className="max-w-md w-full space-y-8">
-          
           <div className="text-center">
             <h1 className="text-3xl font-black uppercase tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-red-500 to-blue-500">
               Select Workspace
@@ -160,7 +161,6 @@ export default function AdminDashboard() {
             <p className="text-sm text-gray-500 tracking-widest uppercase mt-2">Initialize your circuit to continue</p>
           </div>
 
-          {/* Existing Leagues Dropdown */}
           {leagues.length > 0 && (
             <div className="bg-black p-6 rounded-xl border border-gray-800 shadow-xl">
               <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">Your Active Circuits</h2>
@@ -168,7 +168,10 @@ export default function AdminDashboard() {
                 {leagues.map(league => (
                   <button 
                     key={league.id}
-                    onClick={() => selectLeague(league.id.toString())}
+                    onClick={() => {
+                      setActiveLeagueId(league.id.toString());
+                      localStorage.setItem('active_league_id', league.id.toString());
+                    }}
                     className="w-full text-left bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-blue-500 p-4 rounded transition-all text-blue-400 font-bold tracking-wide uppercase"
                   >
                     {league.name}
@@ -184,7 +187,6 @@ export default function AdminDashboard() {
             <div className="flex-1 border-t border-gray-800"></div>
           </div>
 
-          {/* Create New League Form */}
           <div className="bg-black p-6 rounded-xl border border-gray-800 shadow-xl shadow-red-900/10">
             <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">Establish New Circuit</h2>
             <form onSubmit={handleLeagueSubmit} className="space-y-4">
@@ -209,23 +211,15 @@ export default function AdminDashboard() {
               </button>
             </form>
           </div>
-
         </div>
       </div>
     );
   }
-
-  // ---------------------------------------------------------
-  // RENDER: MAIN DASHBOARD (If league IS active)
-  // ---------------------------------------------------------
   
-  // Find the active league object so we can display its name
   const currentLeague = leagues.find(l => l.id.toString() === activeLeagueId);
 
   return (
     <div className="min-h-[90vh] bg-gray-950 text-gray-100 p-6 font-sans flex flex-col items-center border-t border-red-900/30 pt-10">
-      
-      {/* Workspace Indicator Strip */}
       <div className="max-w-xl w-full flex justify-between items-center bg-gray-900/80 border border-gray-800 rounded-t-xl p-3 px-5 border-b-0">
         <div className="flex items-center gap-3">
           <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
@@ -242,8 +236,6 @@ export default function AdminDashboard() {
       </div>
 
       <div className="max-w-xl w-full bg-black rounded-b-xl rounded-tr-xl border border-gray-800 shadow-2xl shadow-blue-900/10 overflow-hidden">
-        
-        {/* Header */}
         <div className="p-6 border-b border-gray-800 bg-gray-900/30 flex justify-between items-center">
           <div>
             <h1 className="text-2xl font-black uppercase tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-red-500 to-blue-500">
@@ -266,7 +258,6 @@ export default function AdminDashboard() {
           </button>
         </div>
 
-        {/* Tab Navigation */}
         <div className="flex border-b border-gray-800 text-xs sm:text-sm font-bold tracking-widest uppercase">
           <button 
             onClick={() => {setActiveTab('sync'); setSyncStats(null); setMessage({text:'', type:''});}}
@@ -288,7 +279,6 @@ export default function AdminDashboard() {
           </button>
         </div>
 
-        {/* Status Message Display */}
         {message.text && (
           <div className={`p-4 mx-6 mt-6 rounded text-sm font-bold tracking-wide border-l-4 ${
             message.type === 'error' ? 'bg-red-950/50 text-red-400 border-red-600' : 
@@ -299,10 +289,7 @@ export default function AdminDashboard() {
           </div>
         )}
 
-        {/* Form Container */}
         <div className="p-6">
-          
-          {/* SYNC TOURNAMENT FORM */}
           {activeTab === 'sync' && (
             <div className="space-y-5">
               <form onSubmit={handleSyncSubmit}>
@@ -321,7 +308,6 @@ export default function AdminDashboard() {
                 </button>
               </form>
 
-              {/* Sync Results Display */}
               {syncStats && (
                 <div className="mt-6 p-4 bg-gray-900 rounded border border-gray-800">
                   <h3 className="text-blue-400 font-bold uppercase tracking-wider mb-2">Sync Report</h3>
@@ -334,7 +320,6 @@ export default function AdminDashboard() {
             </div>
           )}
 
-          {/* PLAYER REGISTRATION FORM */}
           {activeTab === 'player' && (
             <form onSubmit={handlePlayerSubmit} className="space-y-5">
               <div>
@@ -374,7 +359,6 @@ export default function AdminDashboard() {
             </form>
           )}
 
-          {/* TEAM CREATION FORM */}
           {activeTab === 'team' && (
             <form onSubmit={handleTeamSubmit} className="space-y-5">
               <div>
@@ -400,7 +384,6 @@ export default function AdminDashboard() {
               </button>
             </form>
           )}
-
         </div>
       </div>
     </div>

@@ -100,6 +100,21 @@ class UserAuth(BaseModel):
 class LeagueCreate(BaseModel):
     name: str
     description: str = None
+
+class TeamCreate(BaseModel):
+    name: str
+    logo_url: str = None
+    league_id: int
+
+class PlayerCreate(BaseModel):
+    username: str
+    challonge_username: str
+    team_id: int = None
+    league_id: int
+
+class SyncRequest(BaseModel):
+    tournament_id: str
+    league_id: int
 # --- AUTH ROUTES ---
 
 @app.post("/api/signup")
@@ -191,17 +206,19 @@ def calculate_gp_points(rank: int) -> int:
     return 2 # 9th place and below (Participation)
 
 @app.post("/api/sync/challonge")
-def sync_challonge_tournament(request: SyncRequest, db: Session = Depends(get_db), current_admin: User = Depends(get_current_admin)):
+def sync_challonge_tournament(
+    request: SyncRequest, 
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
     headers = {"Authorization-Type": "v1", "Authorization": API_KEY}
     
-    # 1. Fetch Tournament Data
     url = f"https://api.challonge.com/v2/tournaments/{request.tournament_id}.json"
     tourney_res = requests.get(url, headers=headers)
     if tourney_res.status_code != 200:
          raise HTTPException(status_code=400, detail="Failed to fetch tournament from Challonge")
     tourney_data = tourney_res.json()
     
-    # 2. Fetch Participants (where the ranks are)
     parts_url = f"https://api.challonge.com/v2/tournaments/{request.tournament_id}/participants.json"
     parts_res = requests.get(parts_url, headers=headers)
     if parts_res.status_code != 200:
@@ -210,32 +227,31 @@ def sync_challonge_tournament(request: SyncRequest, db: Session = Depends(get_db
 
     players_synced = 0
     
-    # 3. Process each participant
     for p in participants_data:
         attrs = p.get("attributes", {})
-        
-        # Get their Challonge handle (fallback to their display name if they don't have an account)
         challonge_handle = attrs.get("challonge_username") or attrs.get("name")
         final_rank = attrs.get("final_rank")
         
         if not challonge_handle or not final_rank:
             continue
             
-        # Check if they exist in our database
-        player = db.query(Player).filter(Player.challonge_username == challonge_handle).first()
+        # Match player ONLY within this specific league
+        player = db.query(Player).filter(
+            Player.challonge_username == challonge_handle,
+            Player.league_id == request.league_id
+        ).first()
         
-        # --- NEW: AUTO-CREATE PLAYER IF MISSING ---
         if not player:
+            # Auto-create new player and lock them to the active league
             player = Player(
                 username=challonge_handle, 
-                challonge_username=challonge_handle
+                challonge_username=challonge_handle,
+                league_id=request.league_id
             )
             db.add(player)
             db.commit()
             db.refresh(player)
-        # ------------------------------------------
 
-        # Calculate Grand Prix points
         points = 0
         if final_rank == 1: points = 10
         elif final_rank == 2: points = 7
@@ -243,7 +259,6 @@ def sync_challonge_tournament(request: SyncRequest, db: Session = Depends(get_db
         elif final_rank == 4: points = 3
         elif final_rank <= 8: points = 1
 
-        # Check if this placement is already recorded (prevents duplicate points if you sync twice)
         existing_placement = db.query(Placement).filter(
             Placement.player_id == player.id,
             Placement.tournament_id == request.tournament_id
@@ -264,73 +279,43 @@ def sync_challonge_tournament(request: SyncRequest, db: Session = Depends(get_db
     return {
         "message": "Tournament synced successfully",
         "tournament_name": tourney_data.get("data", {}).get("attributes", {}).get("name"),
-        "total_players_synced": players_synced,
-        "unmapped_bladers": [] # Left blank since everyone is auto-mapped now!
+        "total_players_synced": players_synced
     }
 
+@app.get("/api/teams")
+def get_teams(league_id: int, db: Session = Depends(get_db)):
+    """Fetches only the teams belonging to the requested league."""
+    return db.query(Team).filter(Team.league_id == league_id).all()
+
 @app.post("/api/teams")
-def create_team(team: TeamCreate, db: Session = Depends(get_db)):
-    # Check if team already exists
-    existing_team = db.query(Team).filter(Team.name == team.name).first()
-    if existing_team:
-        raise HTTPException(status_code=400, detail="A team with this name already exists.")
-    
-    new_team = Team(name=team.name, logo_url=team.logo_url)
+def create_team(
+    team: TeamCreate, 
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    new_team = Team(name=team.name, logo_url=team.logo_url, league_id=team.league_id)
     db.add(new_team)
     db.commit()
     db.refresh(new_team)
-    return {"message": "Team created successfully", "team": {"id": new_team.id, "name": new_team.name}}
+    return {"message": "Team created", "team": new_team}
 
 @app.post("/api/players")
-def create_player(player: PlayerCreate, db: Session = Depends(get_db), current_admin: User = Depends(get_current_admin)):
-    # Check if username or challonge handle is already taken
-    existing_user = db.query(Player).filter(
-        (Player.username == player.username) | 
-        (Player.challonge_username == player.challonge_username)
-    ).first()
-    
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Username or Challonge handle already registered.")
-    
-    # Optional: Verify team exists if a team_id is provided
-    if player.team_id:
-        team_check = db.query(Team).filter(Team.id == player.team_id).first()
-        if not team_check:
-            raise HTTPException(status_code=404, detail="Team ID not found.")
-
+def create_player(
+    player: PlayerCreate, 
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
     new_player = Player(
         username=player.username,
         challonge_username=player.challonge_username,
-        team_id=player.team_id
+        team_id=player.team_id,
+        league_id=player.league_id
     )
     db.add(new_player)
     db.commit()
     db.refresh(new_player)
-    return {"message": "Player registered successfully", "player": {"id": new_player.id, "username": new_player.username}}
+    return {"message": "Player created", "player": new_player}
 
-@app.get("/api/leaderboard")
-def get_leaderboard(db: Session = Depends(get_db)):
-    """Calculates total GP points per player and returns the sorted standings."""
-    results = db.query(
-        Player.username,
-        Team.name.label("team_name"),
-        func.sum(Placement.points_awarded).label("total_points")
-    ).outerjoin(Team, Player.team_id == Team.id)\
-     .join(Placement, Player.id == Placement.player_id)\
-     .group_by(Player.id, Player.username, Team.name)\
-     .order_by(func.sum(Placement.points_awarded).desc())\
-     .all()
-     
-    # Format the data for the React frontend, automatically assigning ranks
-    return [
-        {
-            "rank": index + 1, 
-            "username": row.username, 
-            "team": row.team_name or "Free Agent", 
-            "points": row.total_points
-        }
-        for index, row in enumerate(results)
-    ]
 
 # ---------------------------------------------------------
 # LEAGUE MANAGEMENT ROUTES
@@ -366,3 +351,36 @@ def get_my_leagues(
     """Fetches only the leagues owned by this specific admin."""
     leagues = db.query(League).filter(League.owner_id == current_admin.id).all()
     return leagues
+
+@app.get("/api/leagues")
+def get_public_leagues(db: Session = Depends(get_db)):
+    """Public route to list all active circuits."""
+    return db.query(League).all()
+
+@app.get("/api/leaderboard")
+def get_league_leaderboard(league_id: int, db: Session = Depends(get_db)):
+    """Calculates and returns the standings for a specific league."""
+    # 1. Grab all players isolated to this specific league
+    players = db.query(Player).filter(Player.league_id == league_id).all()
+    
+    standings = []
+    for p in players:
+        # Sum up all points this player has earned across all synced tournaments
+        total_points = sum(placement.points_awarded for placement in p.placements)
+        
+        # We only want to show players who have actually scored points
+        if total_points > 0:
+            standings.append({
+                "username": p.username,
+                "team": p.team.name if p.team else "Free Agent",
+                "points": total_points
+            })
+            
+    # 2. Sort the array by points (highest to lowest)
+    standings.sort(key=lambda x: x["points"], reverse=True)
+    
+    # 3. Assign official ranks based on their sorted position
+    for i, player in enumerate(standings):
+        player["rank"] = i + 1
+        
+    return standings
