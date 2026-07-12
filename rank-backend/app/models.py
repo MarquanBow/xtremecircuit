@@ -1,61 +1,65 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, Date, DateTime, UniqueConstraint, text
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey
 from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
-from app.database import Base
+from .database import Base
+
+# --- THE IDENTITY ENGINE ---
+
+class User(Base):
+    __tablename__ = "users"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True)
+    hashed_password = Column(String)
+    is_admin = Column(Boolean, default=False)
+    
+    # A user can own multiple leagues
+    leagues = relationship("League", back_populates="owner")
+
+class League(Base):
+    __tablename__ = "leagues"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True)
+    description = Column(String, nullable=True)
+    owner_id = Column(Integer, ForeignKey("users.id"))
+    
+    owner = relationship("User", back_populates="leagues")
+    teams = relationship("Team", back_populates="league")
+    players = relationship("Player", back_populates="league")
+
+# --- THE TOURNAMENT DATA ---
 
 class Team(Base):
     __tablename__ = "teams"
-
+    
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(100), nullable=False, unique=True)
+    name = Column(String, unique=True, index=True)
     logo_url = Column(String, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    # Relationships
+    league_id = Column(Integer, ForeignKey("leagues.id")) # Isolates team to a league
+    
+    league = relationship("League", back_populates="teams")
     players = relationship("Player", back_populates="team")
-
 
 class Player(Base):
     __tablename__ = "players"
-
+    
     id = Column(Integer, primary_key=True, index=True)
-    username = Column(String(50), nullable=False, unique=True)
-    challonge_username = Column(String(100), nullable=False, unique=True)
-    # Corrected 'ondelete' parameter position:
-    team_id = Column(Integer, ForeignKey("teams.id", ondelete="SET NULL"), nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    # Relationships
+    username = Column(String, index=True)
+    challonge_username = Column(String, unique=True, index=True)
+    team_id = Column(Integer, ForeignKey("teams.id"), nullable=True)
+    league_id = Column(Integer, ForeignKey("leagues.id")) # Isolates player to a league
+    
     team = relationship("Team", back_populates="players")
+    league = relationship("League", back_populates="players")
     placements = relationship("Placement", back_populates="player")
-
-
-class Tournament(Base):
-    __tablename__ = "tournaments"
-
-    id = Column(String(100), primary_key=True, index=True)  # Challonge URL identifier slug
-    name = Column(String(150), nullable=False)
-    held_on = Column(Date, nullable=False)
-
-    # Relationships
-    placements = relationship("Placement", back_populates="tournament")
-
 
 class Placement(Base):
     __tablename__ = "placements"
-
+    
     id = Column(Integer, primary_key=True, index=True)
-    # Corrected 'ondelete' parameter positions:
-    tournament_id = Column(String(100), ForeignKey("tournaments.id", ondelete="CASCADE"), nullable=False)
-    player_id = Column(Integer, ForeignKey("players.id", ondelete="CASCADE"), nullable=False)
-    final_rank = Column(Integer, nullable=False)
-    points_awarded = Column(Integer, nullable=False)
-
-    # Relationships
-    tournament = relationship("Tournament", back_populates="placements")
+    player_id = Column(Integer, ForeignKey("players.id"))
+    tournament_id = Column(String, index=True) 
+    rank = Column(Integer)
+    points_awarded = Column(Integer)
+    
     player = relationship("Player", back_populates="placements")
-
-    # Guardrail integrity
-    __table_args__ = (
-        UniqueConstraint('tournament_id', 'player_id', name='_tournament_player_uc'),
-    )

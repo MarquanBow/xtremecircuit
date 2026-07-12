@@ -10,8 +10,15 @@ from pydantic import BaseModel
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func
-from app.models import Tournament, Placement, Player
+from app.models import User, League, Team, Placement, Player
 from typing import Optional
+from passlib.context import CryptContext
+import jwt
+from datetime import datetime, timedelta
+from pydantic import BaseModel, Field
+from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordBearer 
 
 # Automatically build the database tables on startup
 Base.metadata.create_all(bind=engine)
@@ -29,6 +36,110 @@ app.add_middleware(
     allow_methods=["*"],  # Allows all methods (GET, POST, OPTIONS, etc.)
     allow_headers=["*"],  # Allows all headers
 )
+
+# --- SECURITY CONFIGURATION ---
+SECRET_KEY = "xtreme-circuit-super-secret-key" # In production, this goes in a .env file!
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7 # Tokens last for 1 week
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password):
+    return pwd_context.hash(password[:72])
+
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+# --- THE BOUNCER (AUTH DEPENDENCY) ---
+
+# This tells FastAPI where the login route is, so it knows how to handle tokens
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/login")
+
+def get_current_admin(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    """Verifies the JWT token and ensures the user has Admin privileges."""
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    
+    try:
+        # 1. Decode the token to see who it belongs to
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: int = payload.get("id")
+        if user_id is None:
+            raise credentials_exception
+    except jwt.PyJWTError:
+        raise credentials_exception
+        
+    # 2. Find the user in the database
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        raise credentials_exception
+        
+    # 3. Verify Admin Status
+    if not user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="Access denied. Admin privileges required."
+        )
+        
+    return user
+
+# --- PYDANTIC SCHEMAS ---
+class UserAuth(BaseModel):
+    email: str
+    password: str = Field(..., max_length=72)
+
+# --- AUTH ROUTES ---
+
+@app.post("/api/signup")
+def create_user(user: UserAuth, db: Session = Depends(get_db)):
+    # Check if user already exists
+    existing_user = db.query(User).filter(User.email == user.email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    # Check if this is the very first user in the database
+    is_first_user = db.query(User).count() == 0
+    
+    # Create the new user
+    new_user = User(
+        email=user.email,
+        hashed_password=get_password_hash(user.password),
+        is_admin=is_first_user # The very first person to sign up automatically gets Admin rights!
+    )
+    
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    return {"message": "User created successfully", "is_admin": new_user.is_admin}
+
+@app.post("/api/login")
+def login(user: UserAuth, db: Session = Depends(get_db)):
+    # Find the user
+    db_user = db.query(User).filter(User.email == user.email).first()
+    if not db_user or not verify_password(user.password, db_user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    
+    # Generate their digital badge (JWT Token)
+    access_token = create_access_token(
+        data={"sub": db_user.email, "id": db_user.id, "is_admin": db_user.is_admin}
+    )
+    
+    return {
+        "access_token": access_token, 
+        "token_type": "bearer",
+        "is_admin": db_user.is_admin,
+        "user_id": db_user.id
+    }
 
 @app.get("/")
 def read_root():
@@ -77,7 +188,7 @@ def calculate_gp_points(rank: int) -> int:
     return 2 # 9th place and below (Participation)
 
 @app.post("/api/sync/challonge")
-def sync_challonge_tournament(request: SyncRequest, db: Session = Depends(get_db)):
+def sync_challonge_tournament(request: SyncRequest, db: Session = Depends(get_db), current_admin: User = Depends(get_current_admin)):
     headers = {"Authorization-Type": "v1", "Authorization": API_KEY}
     
     # 1. Fetch Tournament Data
@@ -168,7 +279,7 @@ def create_team(team: TeamCreate, db: Session = Depends(get_db)):
     return {"message": "Team created successfully", "team": {"id": new_team.id, "name": new_team.name}}
 
 @app.post("/api/players")
-def create_player(player: PlayerCreate, db: Session = Depends(get_db)):
+def create_player(player: PlayerCreate, db: Session = Depends(get_db), current_admin: User = Depends(get_current_admin)):
     # Check if username or challonge handle is already taken
     existing_user = db.query(Player).filter(
         (Player.username == player.username) | 

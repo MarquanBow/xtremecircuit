@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 export default function AdminDashboard() {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('sync');
   const [teams, setTeams] = useState([]);
   const [message, setMessage] = useState({ text: '', type: '' });
@@ -10,6 +12,17 @@ export default function AdminDashboard() {
   const [teamForm, setTeamForm] = useState({ name: '', logo_url: '' });
   const [syncForm, setSyncForm] = useState({ tournament_id: '' });
 
+  // 1. ROUTE PROTECTION: Boot unauthorized users back to login
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    const isAdmin = localStorage.getItem('is_admin') === 'true';
+    
+    if (!token || !isAdmin) {
+      navigate('/login');
+    }
+  }, [navigate]);
+
+  // Load teams for the dropdown
   useEffect(() => {
     fetch('http://127.0.0.1:8000/api/teams')
       .then(res => res.json())
@@ -22,6 +35,15 @@ export default function AdminDashboard() {
     setTimeout(() => setMessage({ text: '', type: '' }), 8000);
   };
 
+  // Helper to grab the token for API calls
+  const getAuthHeaders = () => {
+    const token = localStorage.getItem('token');
+    return {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}` // This is what the Bouncer is looking for!
+    };
+  };
+
   const handleSyncSubmit = async (e) => {
     e.preventDefault();
     setMessage({ text: 'Syncing with Challonge API...', type: 'loading' });
@@ -30,7 +52,7 @@ export default function AdminDashboard() {
     try {
       const response = await fetch('http://127.0.0.1:8000/api/sync/challonge', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify(syncForm)
       });
       
@@ -42,6 +64,9 @@ export default function AdminDashboard() {
       setSyncForm({ tournament_id: '' });
     } catch (error) {
       displayMessage(error.message, 'error');
+      if (error.message.includes("Credentials") || error.message.includes("Access denied")) {
+        setTimeout(() => navigate('/login'), 2000);
+      }
     }
   };
 
@@ -57,7 +82,7 @@ export default function AdminDashboard() {
     try {
       const response = await fetch('http://127.0.0.1:8000/api/players', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify(payload)
       });
       
@@ -78,7 +103,7 @@ export default function AdminDashboard() {
     try {
       const response = await fetch('http://127.0.0.1:8000/api/teams', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify(teamForm)
       });
       
@@ -94,17 +119,29 @@ export default function AdminDashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100 p-6 font-sans flex items-center justify-center border-t border-red-900/30">
+    <div className="min-h-[90vh] bg-gray-950 text-gray-100 p-6 font-sans flex items-center justify-center border-t border-red-900/30">
       <div className="max-w-xl w-full bg-black rounded-xl border border-gray-800 shadow-2xl shadow-blue-900/10 overflow-hidden">
         
         {/* Header */}
-        <div className="p-6 border-b border-gray-800 bg-gray-900/30">
-          <h1 className="text-2xl font-black uppercase tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-red-500 to-blue-500">
-            Xtreme Circuit Admin
-          </h1>
-          <p className="text-sm text-gray-500 tracking-widest uppercase mt-1">
-            Data & Roster Management
-          </p>
+        <div className="p-6 border-b border-gray-800 bg-gray-900/30 flex justify-between items-center">
+          <div>
+            <h1 className="text-2xl font-black uppercase tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-red-500 to-blue-500">
+              Xtreme Circuit Admin
+            </h1>
+            <p className="text-sm text-gray-500 tracking-widest uppercase mt-1">
+              Data & Roster Management
+            </p>
+          </div>
+          <button 
+            onClick={() => {
+              localStorage.removeItem('token');
+              localStorage.removeItem('is_admin');
+              navigate('/login');
+            }}
+            className="text-xs font-bold uppercase tracking-widest text-red-500 hover:text-red-400 border border-red-900/50 hover:bg-red-900/20 px-3 py-1.5 rounded transition-colors"
+          >
+            Log Out
+          </button>
         </div>
 
         {/* Tab Navigation */}
