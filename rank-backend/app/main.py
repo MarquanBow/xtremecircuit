@@ -1,4 +1,5 @@
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from app.database import Base, engine, get_db
 import app.models as models
@@ -8,6 +9,7 @@ from datetime import datetime
 from pydantic import BaseModel
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func
 from app.models import Tournament, Placement, Player
 from typing import Optional
 
@@ -18,6 +20,14 @@ app = FastAPI(
     title="X-Line Rank API",
     description="Backend ranking engine and Challonge sync system for Beyblade X",
     version="1.0.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins (perfect for local development)
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods (GET, POST, OPTIONS, etc.)
+    allow_headers=["*"],  # Allows all headers
 )
 
 @app.get("/")
@@ -67,85 +77,81 @@ def calculate_gp_points(rank: int) -> int:
     return 2 # 9th place and below (Participation)
 
 @app.post("/api/sync/challonge")
-async def sync_tournament(request: SyncRequest, db: Session = Depends(get_db)):
-    if not CHALLONGE_API_KEY:
-        raise HTTPException(status_code=500, detail="Challonge API Key is missing in the server environment.")
-
-    # 1. Fetch tournament AND participant data in one single network request
-    url = f"https://api.challonge.com/v1/tournaments/{request.tournament_id}.json"
-    params = {"include_participants": 1}
-    auth = (CHALLONGE_USER, CHALLONGE_API_KEY)
-
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, params=params, auth=auth)
-
-    if response.status_code == 404:
-        raise HTTPException(status_code=404, detail="Tournament not found. Check the ID.")
-    elif response.status_code != 200:
-        raise HTTPException(status_code=response.status_code, detail="Challonge API rejected the request.")
-
-    data = response.json()["tournament"]
-
-    # 2. Guardrail: Ensure the tournament is actually finished
-    if data["state"] != "complete":
-        raise HTTPException(status_code=400, detail="Cannot sync. This tournament is not marked as 'Complete'.")
-
-    # 3. Register the Tournament in the database if it doesn't exist
-    tourney_id = str(data["id"])
-    tourney = db.query(Tournament).filter(Tournament.id == tourney_id).first()
+def sync_challonge_tournament(request: SyncRequest, db: Session = Depends(get_db)):
+    headers = {"Authorization-Type": "v1", "Authorization": API_KEY}
     
-    if not tourney:
-        # Extract just the date (YYYY-MM-DD) from Challonge's timestamp
-        completed_date = datetime.fromisoformat(data["completed_at"].split("T")[0]).date()
-        tourney = Tournament(id=tourney_id, name=data["name"], held_on=completed_date)
-        db.add(tourney)
-        db.commit()
-        db.refresh(tourney)
+    # 1. Fetch Tournament Data
+    url = f"https://api.challonge.com/v2/tournaments/{request.tournament_id}.json"
+    tourney_res = requests.get(url, headers=headers)
+    if tourney_res.status_code != 200:
+         raise HTTPException(status_code=400, detail="Failed to fetch tournament from Challonge")
+    tourney_data = tourney_res.json()
+    
+    # 2. Fetch Participants (where the ranks are)
+    parts_url = f"https://api.challonge.com/v2/tournaments/{request.tournament_id}/participants.json"
+    parts_res = requests.get(parts_url, headers=headers)
+    if parts_res.status_code != 200:
+         raise HTTPException(status_code=400, detail="Failed to fetch participants")
+    participants_data = parts_res.json().get("data", [])
 
-    # 4. Process the Bladers and award points
-    participants = data["participants"]
-    synced_count = 0
-    unmapped_bladers = []
-
-    for p_data in participants:
-        p = p_data["participant"]
-        # Players might register with a display name or fall back to their username
-        c_name = p["name"] if p["name"] else p["username"]
-        rank = p["final_rank"]
-
-        if rank is None:
-            continue
-
-        # Look up the player in our custom database
-        player = db.query(Player).filter(Player.challonge_username == c_name).first()
+    players_synced = 0
+    
+    # 3. Process each participant
+    for p in participants_data:
+        attrs = p.get("attributes", {})
         
+        # Get their Challonge handle (fallback to their display name if they don't have an account)
+        challonge_handle = attrs.get("challonge_username") or attrs.get("name")
+        final_rank = attrs.get("final_rank")
+        
+        if not challonge_handle or not final_rank:
+            continue
+            
+        # Check if they exist in our database
+        player = db.query(Player).filter(Player.challonge_username == challonge_handle).first()
+        
+        # --- NEW: AUTO-CREATE PLAYER IF MISSING ---
         if not player:
-            unmapped_bladers.append(c_name)
-            continue
-
-        # Award Points and create Placement record
-        points = calculate_gp_points(rank)
-        new_placement = Placement(
-            tournament_id=tourney.id,
-            player_id=player.id,
-            final_rank=rank,
-            points_awarded=points
-        )
-        db.add(new_placement)
-        
-        try:
+            player = Player(
+                username=challonge_handle, 
+                challonge_username=challonge_handle
+            )
+            db.add(player)
             db.commit()
-            synced_count += 1
-        except IntegrityError:
-            # The UniqueConstraint blocked us. This player already got their points for this event!
-            db.rollback()
+            db.refresh(player)
+        # ------------------------------------------
+
+        # Calculate Grand Prix points
+        points = 0
+        if final_rank == 1: points = 10
+        elif final_rank == 2: points = 7
+        elif final_rank == 3: points = 5
+        elif final_rank == 4: points = 3
+        elif final_rank <= 8: points = 1
+
+        # Check if this placement is already recorded (prevents duplicate points if you sync twice)
+        existing_placement = db.query(Placement).filter(
+            Placement.player_id == player.id,
+            Placement.tournament_id == request.tournament_id
+        ).first()
+
+        if not existing_placement:
+            new_placement = Placement(
+                player_id=player.id,
+                tournament_id=request.tournament_id,
+                rank=final_rank,
+                points_awarded=points
+            )
+            db.add(new_placement)
+            players_synced += 1
+
+    db.commit()
 
     return {
-        "status": "Success",
-        "tournament_name": tourney.name,
-        "total_players_synced": synced_count,
-        "unmapped_bladers": unmapped_bladers,
-        "message": "Bracket successfully mapped to the Xtreme Circuit standings."
+        "message": "Tournament synced successfully",
+        "tournament_name": tourney_data.get("data", {}).get("attributes", {}).get("name"),
+        "total_players_synced": players_synced,
+        "unmapped_bladers": [] # Left blank since everyone is auto-mapped now!
     }
 
 @app.post("/api/teams")
@@ -187,3 +193,27 @@ def create_player(player: PlayerCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_player)
     return {"message": "Player registered successfully", "player": {"id": new_player.id, "username": new_player.username}}
+
+@app.get("/api/leaderboard")
+def get_leaderboard(db: Session = Depends(get_db)):
+    """Calculates total GP points per player and returns the sorted standings."""
+    results = db.query(
+        Player.username,
+        Team.name.label("team_name"),
+        func.sum(Placement.points_awarded).label("total_points")
+    ).outerjoin(Team, Player.team_id == Team.id)\
+     .join(Placement, Player.id == Placement.player_id)\
+     .group_by(Player.id, Player.username, Team.name)\
+     .order_by(func.sum(Placement.points_awarded).desc())\
+     .all()
+     
+    # Format the data for the React frontend, automatically assigning ranks
+    return [
+        {
+            "rank": index + 1, 
+            "username": row.username, 
+            "team": row.team_name or "Free Agent", 
+            "points": row.total_points
+        }
+        for index, row in enumerate(results)
+    ]

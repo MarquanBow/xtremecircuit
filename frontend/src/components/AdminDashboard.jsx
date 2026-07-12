@@ -1,17 +1,15 @@
 import { useState, useEffect } from 'react';
 
 export default function AdminDashboard() {
-  const [activeTab, setActiveTab] = useState('sync'); // 'sync', 'player', or 'team'
+  const [activeTab, setActiveTab] = useState('sync');
   const [teams, setTeams] = useState([]);
   const [message, setMessage] = useState({ text: '', type: '' });
-  const [syncStats, setSyncStats] = useState(null); // To hold tournament sync results
+  const [syncStats, setSyncStats] = useState(null);
 
-  // Form States
   const [playerForm, setPlayerForm] = useState({ username: '', challonge_username: '', team_id: '' });
   const [teamForm, setTeamForm] = useState({ name: '', logo_url: '' });
   const [syncForm, setSyncForm] = useState({ tournament_id: '' });
 
-  // Load teams for the dropdown on mount
   useEffect(() => {
     fetch('http://127.0.0.1:8000/api/teams')
       .then(res => res.json())
@@ -21,10 +19,8 @@ export default function AdminDashboard() {
 
   const displayMessage = (text, type) => {
     setMessage({ text, type });
-    setTimeout(() => setMessage({ text: '', type: '' }), 8000); // Auto-clear after 8 seconds
+    setTimeout(() => setMessage({ text: '', type: '' }), 8000);
   };
-
-  // --- API HANDLERS ---
 
   const handleSyncSubmit = async (e) => {
     e.preventDefault();
@@ -97,39 +93,37 @@ export default function AdminDashboard() {
     }
   };
 
-  // --- UI RENDER ---
-
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 p-6 font-sans flex items-center justify-center">
-      <div className="max-w-xl w-full bg-zinc-900 rounded-xl border border-zinc-800 shadow-2xl overflow-hidden">
+    <div className="min-h-screen bg-gray-950 text-gray-100 p-6 font-sans flex items-center justify-center border-t border-red-900/30">
+      <div className="max-w-xl w-full bg-black rounded-xl border border-gray-800 shadow-2xl shadow-blue-900/10 overflow-hidden">
         
         {/* Header */}
-        <div className="p-6 border-b border-zinc-800 bg-zinc-900/50">
-          <h1 className="text-2xl font-black uppercase tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 to-cyan-500">
+        <div className="p-6 border-b border-gray-800 bg-gray-900/30">
+          <h1 className="text-2xl font-black uppercase tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-red-500 to-blue-500">
             Xtreme Circuit Admin
           </h1>
-          <p className="text-sm text-zinc-500 tracking-widest uppercase mt-1">
+          <p className="text-sm text-gray-500 tracking-widest uppercase mt-1">
             Data & Roster Management
           </p>
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex border-b border-zinc-800 text-xs sm:text-sm font-bold tracking-widest uppercase">
+        <div className="flex border-b border-gray-800 text-xs sm:text-sm font-bold tracking-widest uppercase">
           <button 
             onClick={() => {setActiveTab('sync'); setSyncStats(null); setMessage({text:'', type:''});}}
-            className={`flex-1 py-4 transition-colors ${activeTab === 'sync' ? 'text-purple-400 border-b-2 border-purple-400 bg-zinc-800/30' : 'text-zinc-500 hover:text-zinc-300'}`}
+            className={`flex-1 py-4 transition-colors ${activeTab === 'sync' ? 'text-blue-500 border-b-2 border-blue-500 bg-gray-900/50' : 'text-gray-500 hover:text-gray-300'}`}
           >
             Sync Bracket
           </button>
           <button 
             onClick={() => {setActiveTab('player'); setSyncStats(null); setMessage({text:'', type:''});}}
-            className={`flex-1 py-4 transition-colors ${activeTab === 'player' ? 'text-emerald-400 border-b-2 border-emerald-400 bg-zinc-800/30' : 'text-zinc-500 hover:text-zinc-300'}`}
+            className={`flex-1 py-4 transition-colors ${activeTab === 'player' ? 'text-red-500 border-b-2 border-red-500 bg-gray-900/50' : 'text-gray-500 hover:text-gray-300'}`}
           >
             Add Player
           </button>
           <button 
             onClick={() => {setActiveTab('team'); setSyncStats(null); setMessage({text:'', type:''});}}
-            className={`flex-1 py-4 transition-colors ${activeTab === 'team' ? 'text-cyan-400 border-b-2 border-cyan-400 bg-zinc-800/30' : 'text-zinc-500 hover:text-zinc-300'}`}
+            className={`flex-1 py-4 transition-colors ${activeTab === 'team' ? 'text-blue-300 border-b-2 border-blue-300 bg-gray-900/50' : 'text-gray-500 hover:text-gray-300'}`}
           >
             Add Team
           </button>
@@ -138,9 +132,9 @@ export default function AdminDashboard() {
         {/* Status Message Display */}
         {message.text && (
           <div className={`p-4 mx-6 mt-6 rounded text-sm font-bold tracking-wide border-l-4 ${
-            message.type === 'error' ? 'bg-red-900/20 text-red-400 border-red-500' : 
-            message.type === 'success' ? 'bg-emerald-900/20 text-emerald-400 border-emerald-500' : 
-            'bg-zinc-800 text-zinc-400 border-zinc-600'
+            message.type === 'error' ? 'bg-red-950/50 text-red-400 border-red-600' : 
+            message.type === 'success' ? 'bg-blue-950/50 text-blue-400 border-blue-500' : 
+            'bg-gray-800 text-gray-400 border-gray-600'
           }`}>
             {message.text}
           </div>
@@ -154,41 +148,28 @@ export default function AdminDashboard() {
             <div className="space-y-5">
               <form onSubmit={handleSyncSubmit}>
                 <div>
-                  <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Challonge URL Slug / ID</label>
+                  <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Challonge URL Slug / ID</label>
                   <input 
                     type="text" required
                     value={syncForm.tournament_id}
                     onChange={(e) => setSyncForm({...syncForm, tournament_id: e.target.value})}
-                    className="w-full bg-zinc-950 border border-zinc-700 rounded p-3 text-zinc-100 focus:outline-none focus:border-purple-500 transition-colors"
+                    className="w-full bg-gray-900 border border-gray-700 rounded p-3 text-gray-100 focus:outline-none focus:border-blue-500 transition-colors"
                     placeholder="e.g. worldbeyblade-lrd3mfj5"
                   />
-                  <p className="text-xs text-zinc-600 mt-2 font-mono">Format: subdomain-slug OR slug</p>
                 </div>
-
-                <button type="submit" className="w-full bg-purple-600 hover:bg-purple-500 text-white font-black uppercase tracking-widest py-4 rounded transition-all mt-4">
+                <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black uppercase tracking-widest py-4 rounded transition-all mt-4 shadow-lg shadow-blue-900/20">
                   Run Points Calculation
                 </button>
               </form>
 
               {/* Sync Results Display */}
               {syncStats && (
-                <div className="mt-6 p-4 bg-zinc-950 rounded border border-zinc-800">
-                  <h3 className="text-emerald-400 font-bold uppercase tracking-wider mb-2">Sync Report</h3>
-                  <ul className="text-sm space-y-1 text-zinc-300">
-                    <li><span className="text-zinc-500">Tournament:</span> {syncStats.tournament_name}</li>
-                    <li><span className="text-zinc-500">Profiles Matched:</span> {syncStats.total_players_synced}</li>
+                <div className="mt-6 p-4 bg-gray-900 rounded border border-gray-800">
+                  <h3 className="text-blue-400 font-bold uppercase tracking-wider mb-2">Sync Report</h3>
+                  <ul className="text-sm space-y-1 text-gray-300">
+                    <li><span className="text-gray-500">Tournament:</span> {syncStats.tournament_name}</li>
+                    <li><span className="text-gray-500">Profiles Matched:</span> {syncStats.total_players_synced}</li>
                   </ul>
-                  
-                  {syncStats.unmapped_bladers?.length > 0 && (
-                    <div className="mt-4 pt-4 border-t border-zinc-800">
-                      <h4 className="text-red-400 text-xs font-bold uppercase tracking-widest mb-2">Unmapped Players (No Profile)</h4>
-                      <div className="flex flex-wrap gap-2">
-                        {syncStats.unmapped_bladers.map((name, i) => (
-                          <span key={i} className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-xs text-zinc-400">{name}</span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
                 </div>
               )}
             </div>
@@ -198,31 +179,29 @@ export default function AdminDashboard() {
           {activeTab === 'player' && (
             <form onSubmit={handlePlayerSubmit} className="space-y-5">
               <div>
-                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Display Name</label>
+                <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Display Name</label>
                 <input 
                   type="text" required
                   value={playerForm.username}
                   onChange={(e) => setPlayerForm({...playerForm, username: e.target.value})}
-                  className="w-full bg-zinc-950 border border-zinc-700 rounded p-3 text-zinc-100 focus:outline-none focus:border-emerald-500 transition-colors"
+                  className="w-full bg-gray-900 border border-gray-700 rounded p-3 text-gray-100 focus:outline-none focus:border-red-500 transition-colors"
                 />
               </div>
-
               <div>
-                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Challonge Handle</label>
+                <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Challonge Handle</label>
                 <input 
                   type="text" required
                   value={playerForm.challonge_username}
                   onChange={(e) => setPlayerForm({...playerForm, challonge_username: e.target.value})}
-                  className="w-full bg-zinc-950 border border-zinc-700 rounded p-3 text-zinc-100 focus:outline-none focus:border-emerald-500 transition-colors"
+                  className="w-full bg-gray-900 border border-gray-700 rounded p-3 text-gray-100 focus:outline-none focus:border-red-500 transition-colors"
                 />
               </div>
-
               <div>
-                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Team Affiliation (Optional)</label>
+                <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Team Affiliation (Optional)</label>
                 <select 
                   value={playerForm.team_id}
                   onChange={(e) => setPlayerForm({...playerForm, team_id: e.target.value})}
-                  className="w-full bg-zinc-950 border border-zinc-700 rounded p-3 text-zinc-100 focus:outline-none focus:border-emerald-500 transition-colors appearance-none"
+                  className="w-full bg-gray-900 border border-gray-700 rounded p-3 text-gray-100 focus:outline-none focus:border-red-500 transition-colors appearance-none"
                 >
                   <option value="">-- Free Agent --</option>
                   {teams.map(t => (
@@ -230,8 +209,7 @@ export default function AdminDashboard() {
                   ))}
                 </select>
               </div>
-
-              <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase tracking-widest py-4 rounded transition-all mt-4">
+              <button type="submit" className="w-full bg-red-600 hover:bg-red-500 text-white font-black uppercase tracking-widest py-4 rounded transition-all mt-4 shadow-lg shadow-red-900/20">
                 Initialize Profile
               </button>
             </form>
@@ -241,26 +219,24 @@ export default function AdminDashboard() {
           {activeTab === 'team' && (
             <form onSubmit={handleTeamSubmit} className="space-y-5">
               <div>
-                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Team Name</label>
+                <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Team Name</label>
                 <input 
                   type="text" required
                   value={teamForm.name}
                   onChange={(e) => setTeamForm({...teamForm, name: e.target.value})}
-                  className="w-full bg-zinc-950 border border-zinc-700 rounded p-3 text-zinc-100 focus:outline-none focus:border-cyan-500 transition-colors"
+                  className="w-full bg-gray-900 border border-gray-700 rounded p-3 text-gray-100 focus:outline-none focus:border-blue-400 transition-colors"
                 />
               </div>
-
               <div>
-                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Logo URL (Optional)</label>
+                <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Logo URL (Optional)</label>
                 <input 
                   type="url"
                   value={teamForm.logo_url}
                   onChange={(e) => setTeamForm({...teamForm, logo_url: e.target.value})}
-                  className="w-full bg-zinc-950 border border-zinc-700 rounded p-3 text-zinc-100 focus:outline-none focus:border-cyan-500 transition-colors"
+                  className="w-full bg-gray-900 border border-gray-700 rounded p-3 text-gray-100 focus:outline-none focus:border-blue-400 transition-colors"
                 />
               </div>
-
-              <button type="submit" className="w-full bg-cyan-600 hover:bg-cyan-500 text-white font-black uppercase tracking-widest py-4 rounded transition-all mt-4">
+              <button type="submit" className="w-full bg-blue-600 hover:bg-blue-500 text-white font-black uppercase tracking-widest py-4 rounded transition-all mt-4 shadow-lg shadow-blue-900/20">
                 Register Squad
               </button>
             </form>
