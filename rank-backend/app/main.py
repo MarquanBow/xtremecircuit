@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from app.models import Tournament, Placement, Player
+from typing import Optional
 
 # Automatically build the database tables on startup
 Base.metadata.create_all(bind=engine)
@@ -48,6 +49,14 @@ CHALLONGE_API_KEY = os.getenv("CHALLONGE_API_KEY")
 class SyncRequest(BaseModel):
     tournament_id: str  # Can be the alphanumeric URL slug or the numeric ID
 
+class TeamCreate(BaseModel):
+    name: str
+    logo_url: Optional[str] = None
+
+class PlayerCreate(BaseModel):
+    username: str
+    challonge_username: str
+    team_id: Optional[int] = None   
 def calculate_gp_points(rank: int) -> int:
     """The immutable Xtreme Circuit Point Matrix"""
     if rank == 1: return 15
@@ -138,3 +147,43 @@ async def sync_tournament(request: SyncRequest, db: Session = Depends(get_db)):
         "unmapped_bladers": unmapped_bladers,
         "message": "Bracket successfully mapped to the Xtreme Circuit standings."
     }
+
+@app.post("/api/teams")
+def create_team(team: TeamCreate, db: Session = Depends(get_db)):
+    # Check if team already exists
+    existing_team = db.query(Team).filter(Team.name == team.name).first()
+    if existing_team:
+        raise HTTPException(status_code=400, detail="A team with this name already exists.")
+    
+    new_team = Team(name=team.name, logo_url=team.logo_url)
+    db.add(new_team)
+    db.commit()
+    db.refresh(new_team)
+    return {"message": "Team created successfully", "team": {"id": new_team.id, "name": new_team.name}}
+
+@app.post("/api/players")
+def create_player(player: PlayerCreate, db: Session = Depends(get_db)):
+    # Check if username or challonge handle is already taken
+    existing_user = db.query(Player).filter(
+        (Player.username == player.username) | 
+        (Player.challonge_username == player.challonge_username)
+    ).first()
+    
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Username or Challonge handle already registered.")
+    
+    # Optional: Verify team exists if a team_id is provided
+    if player.team_id:
+        team_check = db.query(Team).filter(Team.id == player.team_id).first()
+        if not team_check:
+            raise HTTPException(status_code=404, detail="Team ID not found.")
+
+    new_player = Player(
+        username=player.username,
+        challonge_username=player.challonge_username,
+        team_id=player.team_id
+    )
+    db.add(new_player)
+    db.commit()
+    db.refresh(new_player)
+    return {"message": "Player registered successfully", "player": {"id": new_player.id, "username": new_player.username}}
