@@ -4,129 +4,250 @@ import { useNavigate } from 'react-router-dom';
 export default function AdminDashboard() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('sync');
-  const [teams, setTeams] = useState([]);
   const [message, setMessage] = useState({ text: '', type: '' });
+  
+  // Data States
+  const [teams, setTeams] = useState([]);
+  const [leagues, setLeagues] = useState([]);
+  const [activeLeagueId, setActiveLeagueId] = useState(localStorage.getItem('active_league_id') || null);
   const [syncStats, setSyncStats] = useState(null);
 
+  // Form States
+  const [leagueForm, setLeagueForm] = useState({ name: '', description: '' });
   const [playerForm, setPlayerForm] = useState({ username: '', challonge_username: '', team_id: '' });
   const [teamForm, setTeamForm] = useState({ name: '', logo_url: '' });
   const [syncForm, setSyncForm] = useState({ tournament_id: '' });
 
-  // 1. ROUTE PROTECTION: Boot unauthorized users back to login
-  useEffect(() => {
+  // Helper: Auth Headers
+  const getAuthHeaders = () => {
     const token = localStorage.getItem('token');
-    const isAdmin = localStorage.getItem('is_admin') === 'true';
-    
-    if (!token || !isAdmin) {
-      navigate('/login');
-    }
-  }, [navigate]);
-
-  // Load teams for the dropdown
-  useEffect(() => {
-    fetch('http://127.0.0.1:8000/api/teams')
-      .then(res => res.json())
-      .then(data => setTeams(data))
-      .catch(err => console.error("Could not load teams", err));
-  }, []);
+    return {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    };
+  };
 
   const displayMessage = (text, type) => {
     setMessage({ text, type });
     setTimeout(() => setMessage({ text: '', type: '' }), 8000);
   };
 
-  // Helper to grab the token for API calls
-  const getAuthHeaders = () => {
+  // 1. ROUTE PROTECTION & INITIAL DATA LOAD
+  useEffect(() => {
     const token = localStorage.getItem('token');
-    return {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}` // This is what the Bouncer is looking for!
-    };
+    const isAdmin = localStorage.getItem('is_admin') === 'true';
+    
+    if (!token || !isAdmin) {
+      navigate('/login');
+      return;
+    }
+
+    // Fetch the Admin's Leagues
+    fetch('http://127.0.0.1:8000/api/leagues/me', { headers: getAuthHeaders() })
+      .then(res => {
+        if (!res.ok) throw new Error("Failed to load leagues. Token may be expired.");
+        return res.json();
+      })
+      .then(data => setLeagues(data))
+      .catch(err => {
+        console.error(err);
+        localStorage.removeItem('token');
+        navigate('/login');
+      });
+
+    // Fetch Teams for the dropdown (We will scope this to the active league later!)
+    fetch('http://127.0.0.1:8000/api/teams')
+      .then(res => res.json())
+      .then(data => setTeams(data))
+      .catch(err => console.error("Could not load teams", err));
+  }, [navigate]);
+
+  // --- LEAGUE MANAGEMENT ---
+  const handleLeagueSubmit = async (e) => {
+    e.preventDefault();
+    setMessage({ text: 'Initializing Workspace...', type: 'loading' });
+
+    try {
+      const response = await fetch('http://127.0.0.1:8000/api/leagues', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(leagueForm)
+      });
+      
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "Failed to create league");
+      
+      displayMessage('League initialized!', 'success');
+      setLeagues([...leagues, data]);
+      setLeagueForm({ name: '', description: '' });
+      
+      // Auto-select the newly created league
+      selectLeague(data.id.toString());
+    } catch (error) {
+      displayMessage(error.message, 'error');
+    }
   };
 
+  const selectLeague = (id) => {
+    setActiveLeagueId(id);
+    localStorage.setItem('active_league_id', id);
+  };
+
+  // --- EXISTING DASHBOARD FUNCTIONS ---
   const handleSyncSubmit = async (e) => {
     e.preventDefault();
     setMessage({ text: 'Syncing with Challonge API...', type: 'loading' });
-    setSyncStats(null);
-
     try {
       const response = await fetch('http://127.0.0.1:8000/api/sync/challonge', {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify(syncForm)
       });
-      
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || "Failed to sync tournament");
-      
       displayMessage('Bracket synchronized successfully!', 'success');
       setSyncStats(data);
       setSyncForm({ tournament_id: '' });
-    } catch (error) {
-      displayMessage(error.message, 'error');
-      if (error.message.includes("Credentials") || error.message.includes("Access denied")) {
-        setTimeout(() => navigate('/login'), 2000);
-      }
-    }
+    } catch (error) { displayMessage(error.message, 'error'); }
   };
 
   const handlePlayerSubmit = async (e) => {
     e.preventDefault();
     setMessage({ text: 'Registering...', type: 'loading' });
-
-    const payload = {
-      ...playerForm,
-      team_id: playerForm.team_id ? parseInt(playerForm.team_id) : null 
-    };
-
+    const payload = { ...playerForm, team_id: playerForm.team_id ? parseInt(playerForm.team_id) : null };
     try {
       const response = await fetch('http://127.0.0.1:8000/api/players', {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify(payload)
       });
-      
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || "Failed to register");
-      
       displayMessage('Blader registered successfully!', 'success');
       setPlayerForm({ username: '', challonge_username: '', team_id: '' });
-    } catch (error) {
-      displayMessage(error.message, 'error');
-    }
+    } catch (error) { displayMessage(error.message, 'error'); }
   };
 
   const handleTeamSubmit = async (e) => {
     e.preventDefault();
     setMessage({ text: 'Creating Team...', type: 'loading' });
-
     try {
       const response = await fetch('http://127.0.0.1:8000/api/teams', {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify(teamForm)
       });
-      
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || "Failed to create team");
-      
       displayMessage('Team created successfully!', 'success');
       setTeamForm({ name: '', logo_url: '' });
       setTeams([...teams, data.team]); 
-    } catch (error) {
-      displayMessage(error.message, 'error');
-    }
+    } catch (error) { displayMessage(error.message, 'error'); }
   };
 
+  // ---------------------------------------------------------
+  // RENDER: WORKSPACE SELECTION (If no league is active)
+  // ---------------------------------------------------------
+  if (!activeLeagueId) {
+    return (
+      <div className="min-h-[90vh] bg-gray-950 text-gray-100 p-6 flex items-center justify-center border-t border-red-900/30">
+        <div className="max-w-md w-full space-y-8">
+          
+          <div className="text-center">
+            <h1 className="text-3xl font-black uppercase tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-red-500 to-blue-500">
+              Select Workspace
+            </h1>
+            <p className="text-sm text-gray-500 tracking-widest uppercase mt-2">Initialize your circuit to continue</p>
+          </div>
+
+          {/* Existing Leagues Dropdown */}
+          {leagues.length > 0 && (
+            <div className="bg-black p-6 rounded-xl border border-gray-800 shadow-xl">
+              <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">Your Active Circuits</h2>
+              <div className="space-y-3">
+                {leagues.map(league => (
+                  <button 
+                    key={league.id}
+                    onClick={() => selectLeague(league.id.toString())}
+                    className="w-full text-left bg-gray-900 hover:bg-gray-800 border border-gray-700 hover:border-blue-500 p-4 rounded transition-all text-blue-400 font-bold tracking-wide uppercase"
+                  >
+                    {league.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center gap-4">
+            <div className="flex-1 border-t border-gray-800"></div>
+            <span className="text-xs text-gray-600 font-bold uppercase tracking-widest">OR</span>
+            <div className="flex-1 border-t border-gray-800"></div>
+          </div>
+
+          {/* Create New League Form */}
+          <div className="bg-black p-6 rounded-xl border border-gray-800 shadow-xl shadow-red-900/10">
+            <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">Establish New Circuit</h2>
+            <form onSubmit={handleLeagueSubmit} className="space-y-4">
+              <div>
+                <input 
+                  type="text" required placeholder="Circuit Name (e.g. Charlotte Throwdown)"
+                  value={leagueForm.name}
+                  onChange={(e) => setLeagueForm({...leagueForm, name: e.target.value})}
+                  className="w-full bg-gray-900 border border-gray-700 rounded p-3 text-gray-100 focus:outline-none focus:border-red-500"
+                />
+              </div>
+              <div>
+                <textarea 
+                  placeholder="Optional Description..."
+                  value={leagueForm.description}
+                  onChange={(e) => setLeagueForm({...leagueForm, description: e.target.value})}
+                  className="w-full bg-gray-900 border border-gray-700 rounded p-3 text-gray-100 focus:outline-none focus:border-red-500 h-24 resize-none"
+                />
+              </div>
+              <button type="submit" className="w-full bg-red-600 hover:bg-red-500 text-white font-black uppercase tracking-widest py-3 rounded transition-all shadow-lg shadow-red-900/20">
+                Launch
+              </button>
+            </form>
+          </div>
+
+        </div>
+      </div>
+    );
+  }
+
+  // ---------------------------------------------------------
+  // RENDER: MAIN DASHBOARD (If league IS active)
+  // ---------------------------------------------------------
+  
+  // Find the active league object so we can display its name
+  const currentLeague = leagues.find(l => l.id.toString() === activeLeagueId);
+
   return (
-    <div className="min-h-[90vh] bg-gray-950 text-gray-100 p-6 font-sans flex items-center justify-center border-t border-red-900/30">
-      <div className="max-w-xl w-full bg-black rounded-xl border border-gray-800 shadow-2xl shadow-blue-900/10 overflow-hidden">
+    <div className="min-h-[90vh] bg-gray-950 text-gray-100 p-6 font-sans flex flex-col items-center border-t border-red-900/30 pt-10">
+      
+      {/* Workspace Indicator Strip */}
+      <div className="max-w-xl w-full flex justify-between items-center bg-gray-900/80 border border-gray-800 rounded-t-xl p-3 px-5 border-b-0">
+        <div className="flex items-center gap-3">
+          <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+          <span className="text-xs text-gray-400 tracking-widest uppercase font-bold">
+            Workspace: <span className="text-white">{currentLeague?.name || 'Loading...'}</span>
+          </span>
+        </div>
+        <button 
+          onClick={() => { setActiveLeagueId(null); localStorage.removeItem('active_league_id'); }}
+          className="text-[10px] uppercase tracking-widest font-bold text-gray-500 hover:text-white transition-colors"
+        >
+          Change Circuit
+        </button>
+      </div>
+
+      <div className="max-w-xl w-full bg-black rounded-b-xl rounded-tr-xl border border-gray-800 shadow-2xl shadow-blue-900/10 overflow-hidden">
         
         {/* Header */}
         <div className="p-6 border-b border-gray-800 bg-gray-900/30 flex justify-between items-center">
           <div>
             <h1 className="text-2xl font-black uppercase tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-red-500 to-blue-500">
-              Xtreme Circuit Admin
+              Command Center
             </h1>
             <p className="text-sm text-gray-500 tracking-widest uppercase mt-1">
               Data & Roster Management
@@ -136,6 +257,7 @@ export default function AdminDashboard() {
             onClick={() => {
               localStorage.removeItem('token');
               localStorage.removeItem('is_admin');
+              localStorage.removeItem('active_league_id');
               navigate('/login');
             }}
             className="text-xs font-bold uppercase tracking-widest text-red-500 hover:text-red-400 border border-red-900/50 hover:bg-red-900/20 px-3 py-1.5 rounded transition-colors"

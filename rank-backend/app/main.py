@@ -97,6 +97,9 @@ class UserAuth(BaseModel):
     email: str
     password: str = Field(..., max_length=72)
 
+class LeagueCreate(BaseModel):
+    name: str
+    description: str = None
 # --- AUTH ROUTES ---
 
 @app.post("/api/signup")
@@ -328,3 +331,38 @@ def get_leaderboard(db: Session = Depends(get_db)):
         }
         for index, row in enumerate(results)
     ]
+
+# ---------------------------------------------------------
+# LEAGUE MANAGEMENT ROUTES
+# ---------------------------------------------------------
+
+@app.post("/api/leagues")
+def create_league(
+    league: LeagueCreate, 
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    """Creates a new league owned by the logged-in admin."""
+    new_league = League(
+        name=league.name,
+        description=league.description,
+        owner_id=current_admin.id
+    )
+    
+    db.add(new_league)
+    try:
+        db.commit()
+        db.refresh(new_league)
+        return new_league
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="A league with this name already exists")
+
+@app.get("/api/leagues/me")
+def get_my_leagues(
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(get_current_admin)
+):
+    """Fetches only the leagues owned by this specific admin."""
+    leagues = db.query(League).filter(League.owner_id == current_admin.id).all()
+    return leagues
